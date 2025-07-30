@@ -46,6 +46,8 @@ let students = {};
 let pollResults = {};
 let pastPolls = [];
 let pollTimeout = null;
+let chatMessages = {}; // Store chat messages by session ID
+let chatParticipants = {}; // Store chat participants by session ID
 
 // Reset poll logic
 function resetPoll() {
@@ -333,6 +335,142 @@ io.on("connection", (socket) => {
     });
   });
 
+  // =============================================
+  // CHAT FUNCTIONALITY
+  // =============================================
+
+  // User joins chat room
+  socket.on("join-chat", (data) => {
+    const { sessionId, user } = data;
+    console.log(`🔥 User joining chat: ${user} in session ${sessionId}`);
+
+    // Initialize session if it doesn't exist
+    if (!chatMessages[sessionId]) {
+      chatMessages[sessionId] = [];
+    }
+    if (!chatParticipants[sessionId]) {
+      chatParticipants[sessionId] = [];
+    }
+
+    // Join the socket room
+    socket.join(`chat-${sessionId}`);
+
+    // Add participant if not already present
+    const existingParticipant = chatParticipants[sessionId].find(
+      (p) => p.name === user
+    );
+    if (!existingParticipant) {
+      chatParticipants[sessionId].push({
+        id: socket.id,
+        name: user,
+        joinedAt: Date.now(),
+      });
+      console.log(`✅ ${user} added to chat room ${sessionId}`);
+    }
+
+    // Send chat history to the newly joined user
+    socket.emit("chat-history", chatMessages[sessionId]);
+    console.log(`📚 Sent chat history to ${user}:`, chatMessages[sessionId]);
+
+    // Broadcast updated participants list to all users in the room
+    io.to(`chat-${sessionId}`).emit(
+      "participants-updated",
+      chatParticipants[sessionId]
+    );
+    console.log(
+      `🔥 Broadcasting updated participants for room ${sessionId}:`,
+      chatParticipants[sessionId]
+    );
+  });
+
+  // User sends a message
+  socket.on("send-message", (data) => {
+    const { sessionId, user, message } = data;
+    console.log(`💬 Message from ${user} in session ${sessionId}: ${message}`);
+
+    // Create message object
+    const messageObj = {
+      id: Date.now() + Math.random(), // Simple ID generation
+      user: user,
+      message: message,
+      timestamp: Date.now(),
+      time: new Date().toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      }),
+    };
+
+    // Store message
+    if (!chatMessages[sessionId]) {
+      chatMessages[sessionId] = [];
+    }
+    chatMessages[sessionId].push(messageObj);
+
+    // Broadcast message to all users in the room
+    io.to(`chat-${sessionId}`).emit("new-message", messageObj);
+    console.log(
+      `🔥 Broadcasting message to room chat-${sessionId}:`,
+      messageObj
+    );
+  });
+
+  // Teacher kicks user from chat
+  socket.on("kick-user", (data) => {
+    const { sessionId, userName } = data;
+    console.log(`🚫 Kick request for ${userName} in session ${sessionId}`);
+
+    // Find the participant
+    if (chatParticipants[sessionId]) {
+      const participantIndex = chatParticipants[sessionId].findIndex(
+        (p) => p.name === userName
+      );
+
+      if (participantIndex !== -1) {
+        const participant = chatParticipants[sessionId][participantIndex];
+
+        // Remove from participants list
+        chatParticipants[sessionId].splice(participantIndex, 1);
+
+        // Notify the kicked user
+        io.to(participant.id).emit("user-kicked", {
+          message: `You have been removed from the chat by the teacher.`,
+          userName: userName,
+        });
+
+        // Broadcast updated participants list
+        io.to(`chat-${sessionId}`).emit(
+          "participants-updated",
+          chatParticipants[sessionId]
+        );
+
+        console.log(`✅ ${userName} kicked from chat room ${sessionId}`);
+      }
+    }
+  });
+
+  // User leaves chat
+  socket.on("leave-chat", (data) => {
+    const { sessionId, user } = data;
+    console.log(`👋 ${user} leaving chat session ${sessionId}`);
+
+    // Remove from participants
+    if (chatParticipants[sessionId]) {
+      chatParticipants[sessionId] = chatParticipants[sessionId].filter(
+        (p) => p.id !== socket.id
+      );
+
+      // Leave the socket room
+      socket.leave(`chat-${sessionId}`);
+
+      // Broadcast updated participants list
+      io.to(`chat-${sessionId}`).emit(
+        "participants-updated",
+        chatParticipants[sessionId]
+      );
+      console.log(`✅ ${user} removed from chat room ${sessionId}`);
+    }
+  });
+
   // Handle disconnection
   socket.on("disconnect", () => {
     console.log(`Client disconnected: ${socket.id}`);
@@ -344,6 +482,30 @@ io.on("connection", (socket) => {
       // Update student count
       io.emit("student_count_update", Object.keys(students).length);
     }
+
+    // Remove from all chat sessions
+    Object.keys(chatParticipants).forEach((sessionId) => {
+      const participantIndex = chatParticipants[sessionId].findIndex(
+        (p) => p.id === socket.id
+      );
+
+      if (participantIndex !== -1) {
+        const participant = chatParticipants[sessionId][participantIndex];
+        chatParticipants[sessionId].splice(participantIndex, 1);
+
+        console.log(
+          `🔥 Broadcasting updated participants after disconnect for room ${sessionId}`
+        );
+        io.to(`chat-${sessionId}`).emit(
+          "participants-updated",
+          chatParticipants[sessionId]
+        );
+
+        console.log(
+          `✅ ${participant.name} removed from chat room ${sessionId} (disconnected)`
+        );
+      }
+    });
   });
 });
 
