@@ -99,14 +99,54 @@ io.on("connection", (socket) => {
       return;
     }
 
-    students[socket.id] = {
-      name: name.trim(),
-      answered: false,
-      joinedAt: Date.now(),
-    };
+    const trimmedName = name.trim();
 
-    console.log(`Student joined: ${name}`);
-    socket.emit("join_success", { name: name.trim() });
+    // Check if this socket already has a student registered
+    if (students[socket.id]) {
+      console.log(
+        `Student ${
+          students[socket.id].name
+        } re-joining with name: ${trimmedName}`
+      );
+      // Update the existing student's name and reset answered status
+      students[socket.id].name = trimmedName;
+      students[socket.id].answered = false;
+      students[socket.id].joinedAt = Date.now();
+    } else {
+      // Check for duplicate names and create unique identifier
+      const existingStudents = Object.values(students).map((s) => s.name);
+      let uniqueName = trimmedName;
+
+      // If name already exists, add a number suffix
+      let counter = 1;
+      while (existingStudents.includes(uniqueName)) {
+        counter++;
+        uniqueName = `${trimmedName} (${counter})`;
+      }
+
+      // Create new student entry
+      students[socket.id] = {
+        name: uniqueName,
+        originalName: trimmedName,
+        answered: false,
+        joinedAt: Date.now(),
+        tabId: socket.id, // Use socket ID as unique tab identifier
+      };
+
+      console.log(
+        `New student joined: ${uniqueName} (original: ${trimmedName})`
+      );
+    }
+
+    socket.emit("join_success", {
+      name: students[socket.id].name,
+      originalName:
+        students[socket.id].originalName || students[socket.id].name,
+      message:
+        students[socket.id].name !== trimmedName
+          ? "Name was modified to ensure uniqueness"
+          : null,
+    });
 
     // Send current poll if active
     if (currentPoll) {
